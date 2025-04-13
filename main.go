@@ -150,6 +150,7 @@ func initWhatsAppClient() {
 		log.Println("Database file doesn't exist, creating...")
 		if err := os.WriteFile(dbPath, []byte{}, 0644); err != nil {
 			log.Printf("Error creating empty database file: %v\n", err)
+			return
 		}
 	}
 
@@ -161,35 +162,41 @@ func initWhatsAppClient() {
 
 	deviceStore, err := container.GetFirstDevice()
 	if err != nil {
-		log.Println("Creating new device...")
+		log.Printf("Error getting device: %v\n", err)
 		deviceStore = container.NewDevice()
 	}
 
 	client = whatsmeow.NewClient(deviceStore, logger)
 	client.AddEventHandler(eventHandler)
 
+	log.Println("Attempting to connect to WhatsApp...")
 	if err := client.Connect(); err != nil {
 		log.Printf("Error connecting to WhatsApp: %v\n", err)
 		return
 	}
+	log.Println("Successfully connected to WhatsApp")
 
 	if !client.IsLoggedIn() {
-		log.Println("Not logged in, please scan QR code")
-		qrChan, _ := client.GetQRChannel(context.Background())
+		log.Println("Not logged in, requesting QR code...")
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		qrChan, err := client.GetQRChannel(ctx)
+		if err != nil {
+			log.Printf("Error getting QR channel: %v\n", err)
+			return
+		}
 		for evt := range qrChan {
+			log.Printf("QR event: %s, code: %s\n", evt.Event, evt.Code)
 			if evt.Event == "code" {
 				log.Println("QR code received")
-
 				qr, err := qrcode.Encode(evt.Code, qrcode.Medium, 256)
 				if err != nil {
 					log.Printf("Error generating QR code: %v\n", err)
 					continue
 				}
-
 				qrCodeMutex.Lock()
 				qrCodeData = base64.StdEncoding.EncodeToString(qr)
 				qrCodeMutex.Unlock()
-
 				log.Println("QR code is now available at /qr endpoint")
 			}
 		}
@@ -199,17 +206,6 @@ func initWhatsAppClient() {
 
 	clientReady = true
 	log.Println("WhatsApp client initialization complete")
-
-	client.AddEventHandler(func(evt interface{}) {
-		switch evt.(type) {
-		case *events.Disconnected:
-			log.Println("Disconnected, attempting to reconnect...")
-			err := client.Connect()
-			if err != nil {
-				log.Printf("Failed to reconnect: %v\n", err)
-			}
-		}
-	})
 }
 
 func eventHandler(evt interface{}) {
