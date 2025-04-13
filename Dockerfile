@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine
+FROM golang:1.23
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ RUN rm -f go.mod go.sum && \
     go mod init whatsapp-bot && \
     go get github.com/mattn/go-sqlite3 && \
     go get go.mau.fi/whatsmeow && \
-    go get google.golang.org/protobuf@v1.28.1 && \
+    go get google.golang.org/protobuf && \
     go get github.com/skip2/go-qrcode && \
     go mod tidy
 
