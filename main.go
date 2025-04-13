@@ -169,22 +169,21 @@ func initWhatsAppClient() {
 	client = whatsmeow.NewClient(deviceStore, logger)
 	client.AddEventHandler(eventHandler)
 
-	log.Println("Attempting to connect to WhatsApp...")
-	if err := client.Connect(); err != nil {
-		log.Printf("Error connecting to WhatsApp: %v\n", err)
-		return
-	}
-	log.Println("Successfully connected to WhatsApp")
+	if client.Store.ID == nil {
 
-	if !client.IsLoggedIn() {
 		log.Println("Not logged in, requesting QR code...")
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		qrChan, err := client.GetQRChannel(ctx)
+		qrChan, err := client.GetQRChannel(context.Background())
 		if err != nil {
 			log.Printf("Error getting QR channel: %v\n", err)
 			return
 		}
+
+		err = client.Connect()
+		if err != nil {
+			log.Printf("Error connecting to WhatsApp: %v\n", err)
+			return
+		}
+
 		for evt := range qrChan {
 			log.Printf("QR event: %s, code: %s\n", evt.Event, evt.Code)
 			if evt.Event == "code" {
@@ -201,6 +200,12 @@ func initWhatsAppClient() {
 			}
 		}
 	} else {
+
+		log.Println("Already logged in, connecting to WhatsApp...")
+		if err := client.Connect(); err != nil {
+			log.Printf("Error connecting to WhatsApp: %v\n", err)
+			return
+		}
 		log.Println("Logged in as", client.Store.ID.String())
 	}
 
