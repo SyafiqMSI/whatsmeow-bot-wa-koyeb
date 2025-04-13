@@ -68,11 +68,24 @@ func main() {
 	}
 
 	go func() {
+		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, "OK")
+		})
+
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintln(w, "WhatsApp bot is running!")
 		})
-		http.ListenAndServe(":8000", nil)
+
+		fmt.Println("Starting HTTP server on :8000")
+
+		if err := http.ListenAndServe("0.0.0.0:8000", nil); err != nil {
+			fmt.Printf("HTTP server error: %v\n", err)
+		}
 	}()
+
+	time.Sleep(1 * time.Second)
+	fmt.Println("HTTP server should be running now")
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
