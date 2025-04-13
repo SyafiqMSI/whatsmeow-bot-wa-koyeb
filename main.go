@@ -71,7 +71,7 @@ func main() {
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintln(w, "WhatsApp bot is running!")
 		})
-		http.ListenAndServe(":10000", nil)
+		http.ListenAndServe(":8000", nil)
 	}()
 
 	c := make(chan os.Signal, 1)
