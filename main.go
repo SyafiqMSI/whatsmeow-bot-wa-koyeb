@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -23,6 +26,8 @@ import (
 
 var client *whatsmeow.Client
 var clientReady = false
+var qrCodeData string
+var qrCodeMutex sync.Mutex
 
 func main() {
 	serverReady := make(chan bool, 1)
@@ -48,6 +53,32 @@ func startHTTPServer(ready chan<- bool) {
 		fmt.Fprintln(w, "OK")
 	})
 
+	http.HandleFunc("/qr", func(w http.ResponseWriter, r *http.Request) {
+		qrCodeMutex.Lock()
+		defer qrCodeMutex.Unlock()
+
+		if qrCodeData == "" {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintln(w, "QR code not available yet. Please try again later.")
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `
+            <html>
+            <head>
+                <title>WhatsApp QR Code</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+            </head>
+            <body style="display: flex; justify-content: center; align-items: center; height: 100vh; flex-direction: column;">
+                <h1>Scan this QR code with WhatsApp</h1>
+                <img src="data:image/png;base64,%s" alt="WhatsApp QR Code" />
+                <p style="margin-top: 20px;">Scan this QR code with your WhatsApp app to log in</p>
+            </body>
+            </html>
+        `, qrCodeData)
+	})
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		status := "WhatsApp bot is running!"
 		if clientReady {
@@ -55,7 +86,38 @@ func startHTTPServer(ready chan<- bool) {
 		} else {
 			status += " WhatsApp client is initializing..."
 		}
-		fmt.Fprintln(w, status)
+
+		qrStatus := ""
+		qrCodeMutex.Lock()
+		if qrCodeData != "" {
+			qrStatus = "QR code is available at <a href='/qr'>/qr</a> endpoint."
+		}
+		qrCodeMutex.Unlock()
+
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `
+            <html>
+            <head>
+                <title>WhatsApp Bot Status</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+                    .container { max-width: 800px; margin: 0 auto; }
+                    h1 { color: #4CAF50; }
+                    .status { padding: 15px; background-color: #f5f5f5; border-radius: 5px; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>WhatsApp Bot Status</h1>
+                    <div class="status">
+                        <p>%s</p>
+                        <p>%s</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        `, status, qrStatus)
 	})
 
 	port := os.Getenv("PORT")
@@ -116,7 +178,19 @@ func initWhatsAppClient() {
 		qrChan, _ := client.GetQRChannel(context.Background())
 		for evt := range qrChan {
 			if evt.Event == "code" {
-				log.Println("QR code:", evt.Code)
+				log.Println("QR code received")
+
+				qr, err := qrcode.Encode(evt.Code, qrcode.Medium, 256)
+				if err != nil {
+					log.Printf("Error generating QR code: %v\n", err)
+					continue
+				}
+
+				qrCodeMutex.Lock()
+				qrCodeData = base64.StdEncoding.EncodeToString(qr)
+				qrCodeMutex.Unlock()
+
+				log.Println("QR code is now available at /qr endpoint")
 			}
 		}
 	} else {

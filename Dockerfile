@@ -11,6 +11,7 @@ RUN rm -f go.mod go.sum && \
     go get github.com/mattn/go-sqlite3 && \
     go get go.mau.fi/whatsmeow && \
     go get google.golang.org/protobuf@v1.28.1 && \
+    go get github.com/skip2/go-qrcode && \
     go mod tidy
 
 RUN go build -o whatsapp-bot
