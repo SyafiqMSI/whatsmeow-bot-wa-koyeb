@@ -17,4 +17,6 @@ RUN go build -o whatsapp-bot
 
 RUN mkdir -p /app/data && chmod 777 /app/data
 
+EXPOSE 8000
+
 CMD ["./whatsapp-bot"]
