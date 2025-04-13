@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -17,35 +19,87 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 var client *whatsmeow.Client
+var clientReady = false
 
 func main() {
+	serverReady := make(chan bool, 1)
+	go startHTTPServer(serverReady)
+
+	<-serverReady
+	log.Println("HTTP server is ready and listening")
+
+	go initWhatsAppClient()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	<-c
+
+	if client != nil {
+		client.Disconnect()
+	}
+}
+
+func startHTTPServer(ready chan<- bool) {
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "OK")
+	})
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		status := "WhatsApp bot is running!"
+		if clientReady {
+			status += " WhatsApp client is connected."
+		} else {
+			status += " WhatsApp client is initializing..."
+		}
+		fmt.Fprintln(w, status)
+	})
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8000"
+	}
+
+	log.Printf("Starting HTTP server on port %s\n", port)
+
+	ready <- true
+
+	if err := http.ListenAndServe("0.0.0.0:"+port, nil); err != nil {
+		log.Fatalf("HTTP server error: %v\n", err)
+	}
+}
+
+func initWhatsAppClient() {
 	logger := waLog.Stdout("Bot", "DEBUG", true)
 
 	dataDir := "/app/data"
-	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dataDir, 0755); err != nil {
-			return
-		}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Printf("Error creating data directory: %v\n", err)
+		return
 	}
 
 	dbPath := filepath.Join(dataDir, "whatsmeow.db")
+	log.Printf("Using database at: %s\n", dbPath)
+
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		log.Println("Database file doesn't exist, creating...")
+		if err := os.WriteFile(dbPath, []byte{}, 0644); err != nil {
+			log.Printf("Error creating empty database file: %v\n", err)
+		}
+	}
 
 	container, err := sqlstore.New("sqlite3", fmt.Sprintf("file:%s?_foreign_keys=on", dbPath), logger)
 	if err != nil {
-		os.WriteFile(dbPath, []byte{}, 0644)
-		container, err = sqlstore.New("sqlite3", fmt.Sprintf("file:%s?_foreign_keys=on", dbPath), logger)
-		if err != nil {
-			return
-		}
+		log.Printf("Error creating database container: %v\n", err)
+		return
 	}
 
 	deviceStore, err := container.GetFirstDevice()
 	if err != nil {
+		log.Println("Creating new device...")
 		deviceStore = container.NewDevice()
 	}
 
@@ -53,47 +107,24 @@ func main() {
 	client.AddEventHandler(eventHandler)
 
 	if err := client.Connect(); err != nil {
+		log.Printf("Error connecting to WhatsApp: %v\n", err)
 		return
 	}
 
 	if !client.IsLoggedIn() {
+		log.Println("Not logged in, please scan QR code")
 		qrChan, _ := client.GetQRChannel(context.Background())
 		for evt := range qrChan {
 			if evt.Event == "code" {
-				fmt.Println("QR code:", evt.Code)
+				log.Println("QR code:", evt.Code)
 			}
 		}
 	} else {
-		fmt.Println("Logged in as", client.Store.ID.String())
+		log.Println("Logged in as", client.Store.ID.String())
 	}
 
-	go func() {
-		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintln(w, "OK")
-		})
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintln(w, "WhatsApp bot is running!")
-		})
-
-		port := os.Getenv("PORT")
-		if port == "" {
-			port = "8000"
-		}
-
-		fmt.Printf("Starting HTTP server on port %s\n", port)
-		if err := http.ListenAndServe("0.0.0.0:"+port, nil); err != nil {
-			fmt.Printf("HTTP server error: %v\n", err)
-		}
-	}()
-
-	fmt.Println("HTTP server initiated")
-
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	<-c
-
-	client.Disconnect()
+	clientReady = true
+	log.Println("WhatsApp client initialization complete")
 }
 
 func eventHandler(evt interface{}) {
@@ -107,6 +138,7 @@ func eventHandler(evt interface{}) {
 		}
 
 		if msgText != "" {
+			log.Printf("Received message: %s\n", msgText)
 			switch msgText {
 			case "Halo":
 				respondToMessage(v, "Hai! Ada yang bisa saya bantu?")
@@ -137,5 +169,10 @@ func respondToMessage(evt *events.Message, text string) {
 		Conversation: proto.String(text),
 	}
 
-	client.SendMessage(context.Background(), recipient, msg)
+	_, err := client.SendMessage(context.Background(), recipient, msg)
+	if err != nil {
+		log.Printf("Error sending message: %v\n", err)
+	} else {
+		log.Printf("Message sent: %s\n", text)
+	}
 }
