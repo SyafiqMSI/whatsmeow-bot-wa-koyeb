@@ -2,7 +2,13 @@ FROM golang:1.23
 
 WORKDIR /app
 
-RUN apk add --no-cache git gcc musl-dev sqlite ca-certificates
+RUN apt-get update && apt-get install -y \
+    git \
+    gcc \
+    sqlite3 \
+    libsqlite3-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 
