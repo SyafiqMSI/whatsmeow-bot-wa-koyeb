@@ -199,6 +199,17 @@ func initWhatsAppClient() {
 
 	clientReady = true
 	log.Println("WhatsApp client initialization complete")
+
+	client.AddEventHandler(func(evt interface{}) {
+		switch evt.(type) {
+		case *events.Disconnected:
+			log.Println("Disconnected, attempting to reconnect...")
+			err := client.Connect()
+			if err != nil {
+				log.Printf("Failed to reconnect: %v\n", err)
+			}
+		}
+	})
 }
 
 func eventHandler(evt interface{}) {
